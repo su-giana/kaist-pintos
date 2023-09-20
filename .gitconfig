@@ -1,0 +1,13 @@
+[user]
+	name = su-giana
+	password = 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
+	email = giananews@gmail.com
+[pull]
+	rebase = false
+[filter "lfs"]
+	smudge = git-lfs smudge -- %f
+	process = git-lfs filter-process
+	required = true
+	clean = git-lfs clean -- %f
+[credential]
+	helper = "!f() { /root/.vscode-server/bin/6261075646f055b99068d3688932416f2346dd3b/node /tmp/vscode-remote-containers-d1bec7ad539de473bf6f1ace8e659094b88c948f.js $*; }; f"

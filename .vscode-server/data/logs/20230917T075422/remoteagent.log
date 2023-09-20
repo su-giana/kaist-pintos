@@ -1,0 +1,8 @@
+2023-09-17 07:54:22.476 [info] Extension host agent started.
+2023-09-17 07:54:23.153 [info] [127.0.0.1][9e95d4a1][ManagementConnection] New connection established.
+2023-09-17 07:54:23.464 [debug] ComputeTargetPlatform: linux-x64
+2023-09-17 07:54:23.644 [info] [127.0.0.1][0f97455e][ExtensionHostConnection] New connection established.
+2023-09-17 07:54:24.611 [info] [127.0.0.1][0f97455e][ExtensionHostConnection] <700> Launched Extension Host Process.
+2023-09-17 07:54:28.426 [warning] No ptyHost heartbeat after 6 seconds
+2023-09-17 09:10:30.476 [info] [127.0.0.1][9e95d4a1][ManagementConnection] The client has reconnected.
+2023-09-17 09:10:30.851 [info] [127.0.0.1][0f97455e][ExtensionHostConnection] The client has reconnected.

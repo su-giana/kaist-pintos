@@ -1,0 +1,20 @@
+2023-09-17 06:50:44.946 [info] Extension host agent started.
+2023-09-17 06:50:45.694 [debug] ComputeTargetPlatform: linux-x64
+2023-09-17 06:50:45.931 [info] [127.0.0.1][b0d72bfc][ManagementConnection] New connection established.
+2023-09-17 06:50:46.483 [info] [127.0.0.1][e473d91a][ExtensionHostConnection] New connection established.
+2023-09-17 06:50:46.507 [info] [127.0.0.1][e473d91a][ExtensionHostConnection] <505> Launched Extension Host Process.
+2023-09-17 06:50:48.558 [info] Getting Manifest... ms-ceintl.vscode-language-pack-ko
+2023-09-17 06:50:48.834 [info] Installing extension: ms-ceintl.vscode-language-pack-ko
+2023-09-17 06:50:50.856 [warning] No ptyHost heartbeat after 6 seconds
+2023-09-17 06:50:51.755 [info] Extracted extension to /root/.vscode-server/extensions/.2d35bc4b-b6e0-4e55-be6f-e8f60c4a21bd: ms-ceintl.vscode-language-pack-ko
+2023-09-17 06:50:51.818 [info] Renamed to /root/.vscode-server/extensions/ms-ceintl.vscode-language-pack-ko-1.73.11021015
+2023-09-17 06:50:51.858 [info] Extracting completed. ms-ceintl.vscode-language-pack-ko
+2023-09-17 06:50:51.860 [info] Adding language packs from the extension ms-ceintl.vscode-language-pack-ko
+2023-09-17 06:50:52.178 [info] Extension installed successfully: ms-ceintl.vscode-language-pack-ko
+2023-09-17 06:51:02.255 [info] [127.0.0.1][b0d72bfc][ManagementConnection] The client has disconnected gracefully, so the connection will be disposed.
+2023-09-17 06:51:02.293 [info] [127.0.0.1][e473d91a][ExtensionHostConnection] <505> Extension Host Process exited with code: 0, signal: null.
+2023-09-17 06:51:04.830 [info] [127.0.0.1][440ba1bb][ManagementConnection] New connection established.
+2023-09-17 06:51:06.251 [info] [127.0.0.1][d6e9d4ff][ExtensionHostConnection] New connection established.
+2023-09-17 06:51:06.267 [info] [127.0.0.1][d6e9d4ff][ExtensionHostConnection] <1286> Launched Extension Host Process.
+2023-09-17 07:51:37.195 [info] [127.0.0.1][440ba1bb][ManagementConnection] The client has disconnected gracefully, so the connection will be disposed.
+2023-09-17 07:51:37.308 [info] [127.0.0.1][d6e9d4ff][ExtensionHostConnection] <1286> Extension Host Process exited with code: 0, signal: null.
