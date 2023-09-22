@@ -7,6 +7,7 @@
 #include "threads/io.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
+#include "lib/kernel/list.h"
 
 /* See [8254] for hardware details of the 8254 timer chip. */
 
@@ -87,14 +88,32 @@ timer_elapsed (int64_t then) {
 	return timer_ticks () - then;
 }
 
+static bool compare_tick (const struct list_elem* a,
+							const struct list_elem* b,
+							void *aux UNUSED)
+{
+	const struct thread *threadA = list_entry (a, struct thread, elem);
+	const struct thread *threadB = list_entry(b, struct thread, elem);
+	return threadA->ticks < threadB->ticks;
+}
+
 /* Suspends execution for approximately TICKS timer ticks. */
 void
 timer_sleep (int64_t ticks) {
 	int64_t start = timer_ticks ();
 
 	ASSERT (intr_get_level () == INTR_ON);
+	/*
 	while (timer_elapsed (start) < ticks)
 		thread_yield ();
+	*/
+
+	struct thread *th = thread_current ();
+	enum intr_level old_level = intr_disable ();
+	th->ticks = ticks + start;
+	list_insert_ordered (&block_list, th->elem, compare_tick, NULL);
+	thread_block ();
+	intr_set_level (old_level);
 }
 
 /* Suspends execution for approximately MS milliseconds. */
@@ -126,6 +145,19 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
 	thread_tick ();
+
+	struct thread *th;
+	
+	while(!list_empty (&block_list))
+	{
+		th = list_entry (list_front (&block_list));
+		if(ticks >= th->ticks)
+		{
+			list_pop_front (&block_list);
+			thread_unblock (th);
+		}
+		else	break;
+	}
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer
