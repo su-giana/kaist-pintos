@@ -1,0 +1,586 @@
+diff --git a/devices/timer.c b/devices/timer.c
+index 796f5a8..fb03503 100644
+--- a/devices/timer.c
++++ b/devices/timer.c
+@@ -87,14 +87,31 @@ timer_elapsed (int64_t then) {
+ 	return timer_ticks () - then;
+ }
+ 
++static bool compare_tick (const struct list_elem *A,
++		const struct list_elem *B, void *aux UNUSED) {
++	const struct thread *threadA = list_entry (A, struct thread, elem);
++	const struct thread *threadB = list_entry (B, struct thread, elem);
++	return threadA->ticks < threadB->ticks;
++}
++
+ /* Suspends execution for approximately TICKS timer ticks. */
+ void
+ timer_sleep (int64_t ticks) {
+ 	int64_t start = timer_ticks ();
+ 
+ 	ASSERT (intr_get_level () == INTR_ON);
++	/*
+ 	while (timer_elapsed (start) < ticks)
+ 		thread_yield ();
++	*/
++	/* Solution */
++	struct thread *th = thread_current ();
++	enum intr_level old_level = intr_disable ();
++	th->ticks = ticks + start;
++	list_insert_ordered (&block_list, &th->elem, compare_tick, NULL);
++	thread_block ();
++	intr_set_level(old_level);
++
+ }
+ 
+ /* Suspends execution for approximately MS milliseconds. */
+@@ -126,6 +143,18 @@ static void
+ timer_interrupt (struct intr_frame *args UNUSED) {
+ 	ticks++;
+ 	thread_tick ();
++
++	/* Solution */
++	struct thread *th;
++
++	while (!list_empty (&block_list)) {
++		th = list_entry (list_front (&block_list), struct thread, elem);
++		if (ticks >= th->ticks) {
++			list_pop_front (&block_list);
++			thread_unblock (th);
++		} else
++			break;
++	}
+ }
+ 
+ /* Returns true if LOOPS iterations waits for more than one timer
+diff --git a/include/threads/fixed-point.h b/include/threads/fixed-point.h
+new file mode 100644
+index 0000000..3e1acf5
+--- /dev/null
++++ b/include/threads/fixed-point.h
+@@ -0,0 +1,10 @@
++#ifndef FIXED_POINT_H
++#define FIXED_POINT_H
++#define fp_fr 14
++#define fp_f (1 << 14)
++#define FP(x) ((x) << 14)
++#define FP2INT(x) ((x) >> 14)
++#define MUL(x, y) (((int64_t)(x)) * (y) / (fp_f))
++#define DIV(x, y) (((int64_t)(x)) * (fp_f) / (y))
++typedef int32_t FP;
++#endif
+diff --git a/include/threads/synch.h b/include/threads/synch.h
+index 3d089fd..60a92ac 100644
+--- a/include/threads/synch.h
++++ b/include/threads/synch.h
+@@ -18,6 +18,10 @@ void sema_self_test (void);
+ 
+ /* Lock. */
+ struct lock {
++	/* Solutions */
++	struct list_elem elem;
++	struct list waiters;
++	/* Solutions done. */
+ 	struct thread *holder;      /* Thread holding lock (for debugging). */
+ 	struct semaphore semaphore; /* Binary semaphore controlling access. */
+ };
+diff --git a/include/threads/thread.h b/include/threads/thread.h
+index 33b46e6..fcb4d9a 100644
+--- a/include/threads/thread.h
++++ b/include/threads/thread.h
+@@ -5,6 +5,7 @@
+ #include <list.h>
+ #include <stdint.h>
+ #include "threads/interrupt.h"
++#include "threads/fixed-point.h"
+ #ifdef VM
+ #include "vm/vm.h"
+ #endif
+@@ -95,6 +96,19 @@ struct thread {
+ 	/* Shared between thread.c and synch.c. */
+ 	struct list_elem elem;              /* List element. */
+ 
++	/* Solution */
++	int64_t ticks;                      /* Saved ticks */
++	int effective_priority;             /* Effective Priority */
++	struct list_elem lock_elem;         /* for waiters in struct lock */
++	struct list locks;                  /* List of locks thread hold */
++
++	struct lock *waiting_lock;
++	struct thread *donator;
++	struct thread *donatee;
++	int nice;
++	FP recent_cpu;
++	/* Solution done. */
++
+ #ifdef USERPROG
+ 	/* Owned by userprog/process.c. */
+ 	uint64_t *pml4;                     /* Page map level 4 */
+@@ -114,6 +128,13 @@ struct thread {
+    Controlled by kernel command-line option "-o mlfqs". */
+ extern bool thread_mlfqs;
+ 
++/* Solution */
++struct list block_list;
++bool compare_priority (const struct list_elem *A,
++		const struct list_elem *B, void *aux UNUSED);
++
++/* Solution done. */
++
+ void thread_init (void);
+ void thread_start (void);
+ 
+diff --git a/threads/synch.c b/threads/synch.c
+index 8ca3230..7f13cb8 100644
+--- a/threads/synch.c
++++ b/threads/synch.c
+@@ -109,10 +109,26 @@ sema_up (struct semaphore *sema) {
+ 	ASSERT (sema != NULL);
+ 
+ 	old_level = intr_disable ();
++	/*
+ 	if (!list_empty (&sema->waiters))
+ 		thread_unblock (list_entry (list_pop_front (&sema->waiters),
+ 					struct thread, elem));
++	*/
++	/* Solution */
++	struct thread *th = NULL;
++	if (!list_empty (&sema->waiters)) {
++		struct list_elem *elem =
++			list_max (&sema->waiters, compare_priority, NULL);
++		th = list_entry(elem, struct thread, elem);
++		list_remove (elem);
++		thread_unblock (th);
++	}
++	/* Solution done. */
+ 	sema->value++;
++	if (!intr_context () && th &&
++			th->effective_priority > thread_current ()->effective_priority)
++		thread_yield();
++
+ 	intr_set_level (old_level);
+ }
+ 
+@@ -150,7 +166,7 @@ sema_test_helper (void *sema_) {
+ 		sema_up (&sema[1]);
+ 	}
+ }
+-
++
+ /* Initializes LOCK.  A lock can be held by at most a single
+    thread at any given time.  Our locks are not "recursive", that
+    is, it is an error for the thread currently holding a lock to
+@@ -170,10 +186,60 @@ void
+ lock_init (struct lock *lock) {
+ 	ASSERT (lock != NULL);
+ 
++	/* Solution */
++	list_init (&lock->waiters);
++	/* Solution done. */
++
+ 	lock->holder = NULL;
+ 	sema_init (&lock->semaphore, 1);
+ }
+ 
++/* Solution */
++/* Compare Priority of Threads */
++static bool
++compare_priority_in_lock (const struct list_elem *A,
++		const struct list_elem *B, void *aux UNUSED) {
++    const struct thread *threadA = list_entry (A, struct thread, lock_elem);
++    const struct thread *threadB = list_entry (B, struct thread, lock_elem);
++    return threadA->effective_priority < threadB->effective_priority;
++}
++
++/* get maximum priority between holding locks' waiters */
++static bool
++compare_priority_in_locks (const struct list_elem *A,
++		const struct list_elem *B, void *aux UNUSED) {
++	struct lock *lockA = list_entry (A, struct lock, elem);
++	struct lock *lockB = list_entry (B, struct lock, elem);
++
++	struct thread *priorityA = list_entry (list_max (&lockA->waiters, compare_priority_in_lock, NULL), struct thread, lock_elem);
++	struct thread *priorityB = list_entry (list_max (&lockB->waiters, compare_priority_in_lock, NULL), struct thread, lock_elem);
++    return priorityA < priorityB;
++}
++
++/* donate priority to holder to max priority of waiters */
++static void
++donate_effective_priority (struct thread *holder) {
++	holder->effective_priority = holder->priority;
++	if (!list_empty (&holder->locks)) {
++		struct lock *l = list_entry (
++				list_max (&holder->locks, compare_priority_in_locks, NULL),
++				struct lock, elem);
++		if (list_empty(&l->waiters))
++			return;
++		struct thread *t = list_entry (
++				list_max (&l->waiters, compare_priority_in_lock, NULL),
++				struct thread, lock_elem);
++
++		if (t && t->effective_priority > holder->effective_priority) {
++			holder->effective_priority = t->effective_priority;
++			struct lock *l = holder->waiting_lock;
++			if (l && l->holder)
++				donate_effective_priority (l->holder);
++		}
++	}
++}
++/* Solution done. */
++
+ /* Acquires LOCK, sleeping until it becomes available if
+    necessary.  The lock must not already be held by the current
+    thread.
+@@ -188,8 +254,36 @@ lock_acquire (struct lock *lock) {
+ 	ASSERT (!intr_context ());
+ 	ASSERT (!lock_held_by_current_thread (lock));
+ 
++	/*
+ 	sema_down (&lock->semaphore);
+ 	lock->holder = thread_current ();
++	*/
++
++	/* Solution */
++	struct thread *cur = thread_current ();
++	struct thread *holder = lock->holder;
++	if(thread_mlfqs) {
++		sema_down (&lock->semaphore);
++		lock->holder = cur;
++		return;
++	}
++
++	if (holder) {
++		/* insert current thread into lock */
++		list_push_back (&lock->waiters, &cur->lock_elem);
++		cur->waiting_lock = lock;
++		donate_effective_priority (holder);
++	}
++	sema_down (&lock->semaphore);
++
++	/* remove current thread from waiting list */
++	if (holder)
++		list_remove (&cur->lock_elem);
++	cur->waiting_lock = NULL;
++	/* insert current lock into holding locks list */
++	list_push_back (&cur->locks, &lock->elem);
++	lock->holder = cur;
++	/* Solution done. */
+ }
+ 
+ /* Tries to acquires LOCK and returns true if successful or false
+@@ -222,7 +316,18 @@ lock_release (struct lock *lock) {
+ 	ASSERT (lock != NULL);
+ 	ASSERT (lock_held_by_current_thread (lock));
+ 
++	//lock->holder = NULL;
++	/* Solution */
++	if(thread_mlfqs) {
++		lock->holder = NULL;
++		sema_up (&lock->semaphore);
++		return;
++	}
++	struct thread *holder = lock->holder;
++	list_remove (&lock->elem);      /* remove lock from holding list */
+ 	lock->holder = NULL;
++	donate_effective_priority (holder); /* recalculate priority */
++	/* Solution done. */
+ 	sema_up (&lock->semaphore);
+ }
+ 
+@@ -288,6 +393,28 @@ cond_wait (struct condition *cond, struct lock *lock) {
+ 	lock_acquire (lock);
+ }
+ 
++/* Solution */
++/* get semaphore which has maximum eff_priority */
++static bool
++compare_priority_cond (const struct list_elem *A,
++		const struct list_elem *B, void *aux UNUSED) {
++	struct semaphore *semaphoreA =
++		&list_entry (A, struct semaphore_elem, elem)->semaphore;
++	struct semaphore *semaphoreB =
++		&list_entry (B, struct semaphore_elem, elem)->semaphore;
++	const struct thread *threadA;
++	const struct thread *threadB;
++
++	threadA = list_entry (
++			list_max (&semaphoreA->waiters, compare_priority, NULL),
++			struct thread, elem);
++	threadB = list_entry (
++			list_max (&semaphoreB->waiters, compare_priority, NULL),
++			struct thread, elem);
++	return threadA->priority < threadB->priority;
++}
++/* Solution done. */
++
+ /* If any threads are waiting on COND (protected by LOCK), then
+    this function signals one of them to wake up from its wait.
+    LOCK must be held before calling this function.
+@@ -302,9 +429,23 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED) {
+ 	ASSERT (!intr_context ());
+ 	ASSERT (lock_held_by_current_thread (lock));
+ 
++	/*
+ 	if (!list_empty (&cond->waiters))
+ 		sema_up (&list_entry (list_pop_front (&cond->waiters),
+ 					struct semaphore_elem, elem)->semaphore);
++	*/
++	/* Solution */
++	struct list_elem *elem;
++	struct semaphore *sema;
++	if (!list_empty (&cond->waiters)) {
++		/* sema_up according to comp_priority_cond */
++		elem = list_max (&cond->waiters, compare_priority_cond, NULL);
++		sema = &list_entry (elem, struct semaphore_elem, elem)->semaphore;
++
++		list_remove (elem);
++		sema_up (sema);
++	}
++	/* Solution done. */
+ }
+ 
+ /* Wakes up all threads, if any, waiting on COND (protected by
+diff --git a/threads/thread.c b/threads/thread.c
+index bc9e260..8ee17a0 100644
+--- a/threads/thread.c
++++ b/threads/thread.c
+@@ -10,6 +10,7 @@
+ #include "threads/palloc.h"
+ #include "threads/synch.h"
+ #include "threads/vaddr.h"
++#include "devices/timer.h"
+ #include "intrinsic.h"
+ #ifdef USERPROG
+ #include "userprog/process.h"
+@@ -40,6 +41,11 @@ static struct lock tid_lock;
+ /* Thread destruction requests */
+ static struct list destruction_req;
+ 
++/* Solution */
++/* List of blocked processes */
++struct list block_list;
++FP load_avg;
++
+ /* Statistics. */
+ static long long idle_ticks;    /* # of timer ticks spent idle. */
+ static long long kernel_ticks;  /* # of timer ticks in kernel threads. */
+@@ -109,6 +115,11 @@ thread_init (void) {
+ 	lock_init (&tid_lock);
+ 	list_init (&ready_list);
+ 	list_init (&destruction_req);
++	/* Solution */
++	list_init (&block_list);
++	if (thread_mlfqs)
++		load_avg = 0;
++	/* Solution done. */
+ 
+ 	/* Set up a thread structure for the running thread. */
+ 	initial_thread = running_thread ();
+@@ -133,6 +144,43 @@ thread_start (void) {
+ 	sema_down (&idle_started);
+ }
+ 
++/* Solution */
++static void
++thread_for_each (void (*action)(struct thread *)) {
++	struct list_elem *e;
++	 for (e = list_begin (&ready_list); e != list_end (&ready_list);
++			 e = list_next (e)) {
++		 struct thread *t = list_entry (e, struct thread, elem);
++		 action (t);
++	 }
++	 for (e = list_begin (&block_list); e != list_end (&block_list);
++			 e = list_next (e)) {
++		 struct thread *t = list_entry (e, struct thread, elem);
++		 action (t);
++	 }
++	 if (thread_current () != idle_thread) {
++		 action (thread_current ());
++	 }
++}
++
++static void
++calc_recent_cpu (struct thread *t) {
++	t->recent_cpu = DIV (MUL (MUL (FP (2), load_avg), t->recent_cpu),
++			MUL (FP (2), load_avg) + FP (1)) + FP (t->nice);
++}
++
++static void
++calc_priority (struct thread *t) {
++	t->priority = PRI_MAX - FP2INT (DIV (t->recent_cpu, FP (4))) - 2 * t->nice;
++	if (t->priority > PRI_MAX)
++		t->priority = PRI_MAX;
++	else if (t->priority < PRI_MIN)
++		t->priority = PRI_MIN;
++
++	t->effective_priority = t->priority;
++}
++/* Solution done. */
++
+ /* Called by the timer interrupt handler at each timer tick.
+    Thus, this function runs in an external interrupt context. */
+ void
+@@ -148,6 +196,25 @@ thread_tick (void) {
+ #endif
+ 	else
+ 		kernel_ticks++;
++	/* Solution */
++	if (thread_mlfqs) {
++		uint64_t rthreads = list_size(&ready_list) + (t != idle_thread);
++		/* update load_avg and update recent_cpu of all threads per 1s. */
++		if (timer_ticks () % TIMER_FREQ == 0) {
++			load_avg = DIV (MUL (FP (59), load_avg), FP (60)) +
++				DIV (FP (rthreads), FP (60));
++			thread_for_each (calc_recent_cpu);
++		}
++		/* if current thread is not idle thread add 1 to recent_cpu */
++		if (t != idle_thread) {
++			t->recent_cpu += FP (1);
++		}
++		/* every 4 ticks, update priority of all threads. */
++		if (timer_ticks() % 4 == 3) {
++			 thread_for_each (calc_priority);
++		}
++	}
++	/* Solution done. */
+ 
+ 	/* Enforce preemption. */
+ 	if (++thread_ticks >= TIME_SLICE)
+@@ -203,10 +270,21 @@ thread_create (const char *name, int priority,
+ 	t->tf.ss = SEL_KDSEG;
+ 	t->tf.cs = SEL_KCSEG;
+ 	t->tf.eflags = FLAG_IF;
+-
++	/* Solution */
++	if (thread_mlfqs) {
++		t->recent_cpu = thread_current ()->recent_cpu;
++		t->nice = thread_current ()->nice;
++		calc_priority (t);
++	}
+ 	/* Add to run queue. */
+ 	thread_unblock (t);
+ 
++	/* Solution */
++	if (thread_current()->effective_priority < t->effective_priority) {
++		thread_yield ();
++	}
++	/* Solution done. */
++
+ 	return tid;
+ }
+ 
+@@ -220,8 +298,7 @@ void
+ thread_block (void) {
+ 	ASSERT (!intr_context ());
+ 	ASSERT (intr_get_level () == INTR_OFF);
+-	thread_current ()->status = THREAD_BLOCKED;
+-	schedule ();
++	do_schedule (THREAD_BLOCKED);
+ }
+ 
+ /* Transitions a blocked thread T to the ready-to-run state.
+@@ -311,40 +388,56 @@ thread_yield (void) {
+ /* Sets the current thread's priority to NEW_PRIORITY. */
+ void
+ thread_set_priority (int new_priority) {
+-	thread_current ()->priority = new_priority;
++	//thread_current ()->priority = new_priority;
++	/* Solution */
++	struct thread *current = thread_current ();
++	current->priority = new_priority;
++	if (list_empty (&current->locks))
++		current->effective_priority = new_priority;
++	thread_yield ();
+ }
+ 
+ /* Returns the current thread's priority. */
+ int
+ thread_get_priority (void) {
+-	return thread_current ()->priority;
++	return thread_current ()->effective_priority;
+ }
+ 
+ /* Sets the current thread's nice value to NICE. */
+ void
+ thread_set_nice (int nice UNUSED) {
+ 	/* TODO: Your implementation goes here */
++	/* Solution */
++	thread_current ()->nice = nice;
++	calc_priority (thread_current ());
++	/* Solution done. */
+ }
+ 
+ /* Returns the current thread's nice value. */
+ int
+ thread_get_nice (void) {
+ 	/* TODO: Your implementation goes here */
+-	return 0;
++	/* Solution */
++	return thread_current ()->nice;
++	/* Solution done. */
+ }
+ 
+ /* Returns 100 times the system load average. */
+ int
+ thread_get_load_avg (void) {
+ 	/* TODO: Your implementation goes here */
+-	return 0;
++	/* Solution */
++	return FP2INT (MUL (FP (100), load_avg));
++	/* Solution done. */
+ }
+ 
+ /* Returns 100 times the current thread's recent_cpu value. */
+ int
+ thread_get_recent_cpu (void) {
+ 	/* TODO: Your implementation goes here */
+-	return 0;
++	/* Solution */
++	return FP2INT (MUL (FP (100), thread_current ()->recent_cpu));
++	/* Solution done.*/
+ }
+ 
+ /* Idle thread.  Executes when no other thread is ready to run.
+@@ -406,11 +499,26 @@ init_thread (struct thread *t, const char *name, int priority) {
+ 	memset (t, 0, sizeof *t);
+ 	t->status = THREAD_BLOCKED;
+ 	strlcpy (t->name, name, sizeof t->name);
++	//t->priority = priority;
++	/* Solution */
++	t->priority = t->effective_priority = priority;
++	list_init (&t->locks);
++	/* Solution done. */
+ 	t->tf.rsp = (uint64_t) t + PGSIZE - sizeof (void *);
+ 	t->priority = priority;
+ 	t->magic = THREAD_MAGIC;
+ }
+ 
++/* Solution */
++bool
++compare_priority (const struct list_elem *A,
++		const struct list_elem *B, void *aux UNUSED) {
++	const struct thread *threadA = list_entry (A, struct thread, elem);
++	const struct thread *threadB = list_entry (B, struct thread, elem);
++	return threadA->effective_priority < threadB->effective_priority;
++}
++/* Solution done. */
++
+ /* Chooses and returns the next thread to be scheduled.  Should
+    return a thread from the run queue, unless the run queue is
+    empty.  (If the running thread can continue running, then it
+@@ -420,8 +528,15 @@ static struct thread *
+ next_thread_to_run (void) {
+ 	if (list_empty (&ready_list))
+ 		return idle_thread;
++	/*
+ 	else
+ 		return list_entry (list_pop_front (&ready_list), struct thread, elem);
++	*/
++	/* Solution */
++	struct list_elem *elem = list_max (&ready_list, compare_priority, NULL);
++	struct thread *th = list_entry (elem, struct thread, elem);
++	list_remove (elem);
++	return th;
+ }
+ 
+ /* Use iretq to launch the thread */
